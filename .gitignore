@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.py[cod]
+*$py.class
+.DS_Store
+data/cache.json
+exports/*.csv
+exports/*.xlsx
+exports/*.json
