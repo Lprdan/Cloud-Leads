@@ -34,6 +34,8 @@
 html, body {
     height: 100%;
     overflow: hidden;
+    margin: 0;
+    padding: 0;
 }
 
 body {
@@ -235,6 +237,7 @@ body {
     grid-template-rows: auto 1fr;
     overflow: hidden;
     height: 100vh;
+    box-sizing: border-box;
 }
 
 /* ── TOPBAR ─────────────────────────────────── */
@@ -331,6 +334,8 @@ body {
     display: grid;
     grid-template-columns: 1fr 320px;
     overflow: hidden;
+    height: 100%;
+    position: relative;
 }
 
 #map {

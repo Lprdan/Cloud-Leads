@@ -1,0 +1,14 @@
+use_default_settings: true
+
+server:
+  secret_key: "super-secret-key-12345678901234567890"
+  limiter: false
+  port: 8080
+  bind_address: "0.0.0.0"
+
+search:
+  safe_search: 0
+  autocomplete: "google"
+
+ui:
+  static_use_hash: true

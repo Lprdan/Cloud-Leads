@@ -2,36 +2,32 @@ from fastapi import FastAPI, Request, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, JSONResponse
+from contextlib import asynccontextmanager
 import uvicorn
 import os
 import json
 
-from core.config import settings
-from services.google_maps import google_service
-from core.analyzer import analyzer
-from core.scoring import scorer
-from services.sales_generator import generator
+from core.cache import save_to_cache, load_from_cache
+from services.lead_service import lead_service
 from services.export_service import export_service
+from core.broker import broker
+from tasks.lead_tasks import process_leads_task
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-app = FastAPI(title="CloudLeads Finder API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await broker.startup()
+    yield
+    await broker.shutdown()
+
+app = FastAPI(title="CloudLeads Finder API", lifespan=lifespan)
 
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
-# Local cache path
-CACHE_FILE = os.path.join(BASE_DIR, "data", "cache.json")
-
-def save_to_cache(data):
-    with open(CACHE_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
-
-def load_from_cache():
-    if os.path.exists(CACHE_FILE):
-        with open(CACHE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return []
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
+templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
@@ -40,49 +36,36 @@ async def read_root(request: Request):
 @app.get("/api/search")
 async def search_leads(niche: str = "restaurants", radius: int = 50000, lat: float = -23.3522, lng: float = -46.9185):
     """
-    Triggers the lead generation process.
+    Triggers the lead generation process in the background.
     """
-    print(f"DEBUG: Searching for {niche} | Radius: {radius} | Lat: {lat} | Lng: {lng}")
-    # 1. Search for businesses
-    # Convert radius from km to meters
-    radius_meters = radius * 1000
-    raw_results = google_service.search_nearby_businesses(niche, lat, lng, radius_meters)
+    print(f"API: Scheduling search for {niche} | Radius: {radius} | Lat: {lat} | Lng: {lng}")
 
-    processed_leads = []
-    for place in raw_results:
-        # 2. Get Full Details
-        details = google_service.get_business_details(place["place_id"])
+    # Instead of calling the service directly, we send a task to Redis
+    await process_leads_task.kiq(niche, lat, lng, radius)
 
-        # 3. Analyze Presence
-        analysis = analyzer.analyze_business(details)
-
-        # 4. Score Lead
-        score_data = scorer.calculate_score(analysis)
-
-        # 5. Generate Sales Approach
-        approach = generator.generate_approach(details.get("name", "Business"), score_data, analysis)
-
-        # Combine everything into a Lead object
-        lead = {
-            "id": place["place_id"],
-            "name": details.get("name"),
-            "address": details.get("formatted_address"),
-            "phone": details.get("formatted_phone_number"),
-            "website": details.get("website"),
-            "rating": details.get("rating"),
-            "reviews": details.get("user_ratings_total"),
-            "lat": details.get("geometry", {}).get("location", {}).get("lat"),
-            "lng": details.get("geometry", {}).get("location", {}).get("lng"),
-            "score": score_data["score"],
-            "potential": score_data["potential"],
-            "reasons": score_data["reasons"],
-            "approach": approach,
-            "niche": niche
+    return {
+        "status": "processing",
+        "message": f"Search for {niche} has been started in the background. Please check stats or export in a few moments.",
+        "details": {
+            "niche": niche,
+            "radius": radius
         }
-        processed_leads.append(lead)
+    }
 
-    save_to_cache(processed_leads)
-    return processed_leads
+@app.get("/api/leads")
+async def get_leads():
+    """
+    Returns the current list of leads from cache.
+    Ensures it always returns a list to avoid frontend crashes.
+    """
+    try:
+        leads = load_from_cache()
+        if leads is None or not isinstance(leads, list):
+            return []
+        return leads
+    except Exception as e:
+        print(f"Error loading leads from cache: {e}")
+        return []
 
 @app.get("/api/export")
 async def export_leads(format: str = "csv"):
